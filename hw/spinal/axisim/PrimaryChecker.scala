@@ -212,7 +212,6 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
   StreamMonitor(axi.aw, clockDomain) { payload =>
     val key = payload.id.toInt
     BMonitor.update(key, BMonitor.getOrElse(key, 0) + 1)
-    println(f"New ${payload.id.toInt} in. Monitor state: ${BMonitor}")
   }
 
   /** AXI W: Keeps track of amount of bytes written in every burst beats. */
