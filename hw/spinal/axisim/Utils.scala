@@ -593,3 +593,19 @@ class Axi4ReadInFlightCounter(increment: Stream[Axi4Ar], decrement: Stream[Axi4R
   }
 
 }
+
+
+class Axi4WriteInFlightCounter(increment: Stream[Axi4Aw], decrement: Stream[Axi4B], clockdomain: ClockDomain) {
+  /** Amount of on-going (i.e., in-flight) transactions. */
+  var count: Int = 0
+
+  StreamMonitor(increment, clockdomain) { _ =>
+    this.count += 1
+  }
+
+  StreamMonitor(decrement, clockdomain) { _ =>
+    this.count -= 1
+  }
+
+}
+

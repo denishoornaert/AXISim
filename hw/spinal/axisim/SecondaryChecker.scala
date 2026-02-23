@@ -30,7 +30,7 @@ class Axi4CheckerSecondary(axi: Axi4, clockDomain: ClockDomain) {
   private val RDriver = ChannelDriverRandom(axi.r, clockDomain)
   // AW
   private val AWQueue = new mutable.Queue[Axi4AWJob]()
-  private val AWCounter = new Axi4InFlightCounter(Seq(axi.aw), Seq(axi.b), clockDomain)
+  private val AWCounter = new Axi4WriteInFlightCounter(axi.aw, axi.b, clockDomain)
   // W
   private var wBeatCount = 0
   // B
