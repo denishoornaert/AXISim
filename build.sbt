@@ -1,5 +1,5 @@
 ThisBuild / version := "1.0"
-ThisBuild / scalaVersion := "2.13.14"
+ThisBuild / scalaVersion := "2.13.16"
 ThisBuild / organization := "org.example"
 
 val spinalVersion = "1.12.3"
@@ -9,7 +9,7 @@ val spinalIdslPlugin = compilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-
 
 lazy val projectname = (project in file("."))
   .settings(
-    name := "myproject", 
+    name := "AXISim", 
     Compile / scalaSource := baseDirectory.value / "hw" / "spinal",
     libraryDependencies ++= Seq(spinalCore, spinalLib, spinalIdslPlugin)
   )
