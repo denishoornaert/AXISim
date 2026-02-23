@@ -72,7 +72,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  @return completed `true` if no write transactions are pending.
    */
   def allWritesCompleted(): Boolean = {
-    return BMonitor.isEmpty && AWDriver.isDone()
+    return BMonitor.values.forall(_ == 0) && AWDriver.isDone()
   }
 
   /**
@@ -81,7 +81,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  @return completed `true` if no read transactions are pending.
    */
   def allReadsCompleted(): Boolean = {
-    return RMonitor.isEmpty && ARDriver.isDone()
+    return RMonitor.values.forall(_ == 0) && ARDriver.isDone()
   }
 
   /** Start timer for read bandwidth measurement. */
