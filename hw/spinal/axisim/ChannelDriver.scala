@@ -23,6 +23,9 @@ import spinal.lib.bus.amba4.axi._
  */
 abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain) {
 
+  /** Flag indicating whether the driver is thottled */
+  var throttle: Boolean = false
+
   /** Internal queue storing the unserved in-flight AXI4 job. */
   val storage = new Axi4JobQueue(cd)
 
@@ -69,39 +72,51 @@ abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain)
    *  The driver also looks after schedulable jobs when the previous has been 
    *  performed (or if none where previously scheduled).
    */
-  private val ctrl = StreamDriver(channel, cd) { p =>
+  private val ctrl = StreamDriver(channel, cd) { p => false }
+  ctrl.driver = (p: T) => {
     var status = false
     // If we are back in and the current scheduled is marked as placed, it must be done...
     if ((this.scheduled != null) && this.scheduled.wasPlaced()) {
       this.scheduled.markAsDone()
     }
-    // Schedule new job if any available AND ready
-    if (this.isScheduledAvailable()) {
-      if (this.storage.hasCandidate()) {
-        status = this.schedule()
-        // If job scheduled and the job is not done, place on bus
-        if (status) {
-          this.scheduled.place()
+    if (!throttle) {
+      // Schedule new job if any available AND ready
+      if (this.isScheduledAvailable()) {
+        if (this.storage.hasCandidate()) {
+          status = this.schedule()
+          // If job scheduled and the job is not done, place on bus
+          if (status) {
+            this.scheduled.place()
+            val delay = 0
+            this.ctrl.transactionDelay = () => { delay }
+          }
         }
       }
-    }
-    else {
-      // For handling bursts
-      if (this.isScheduledBusy()) {
-        status = true
-        this.scheduled.place()
+      else {
+        // For handling bursts
+        if (this.isScheduledBusy()) {
+          status = true
+          this.scheduled.place()
+        }
       }
     }
     status
   }
 
   // Explicitly set control over StreamDriver's flow
-  this.ctrl.delay = 0
   this.ctrl.setFactor(1.1f)
 
   /** Indicates whether there are pending transactions. */
   def isDone(): Boolean = {
     return this.storage.isEmpty && this.isScheduledAvailable()
+  }
+
+  def halt(): Unit = {
+    throttle = true
+  }
+
+  def resume(): Unit = {
+    throttle = false
   }
 
 }

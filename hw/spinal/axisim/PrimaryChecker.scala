@@ -168,10 +168,11 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  response phase.
    */
   StreamMonitor(axi.ar, clockDomain) { payload =>
-    if (!(RMonitor contains payload.id.toInt)) {
-      RMonitor += (payload.id.toInt -> 0)
+    val key = payload.id.toInt
+    RMonitor.update(key, RMonitor.getOrElse(key, 0) + 1)
+    if (RMonitor.values.sum == axi.config.readIssuingCapability) {
+      ARDriver.halt()
     }
-    RMonitor(payload.id.toInt) += 1
   }
 
   /** AXI R: Random drive for R ready signal. */
@@ -200,6 +201,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
       if (RMonitor(job.id) == 0)
         RMonitor.remove(job.id)
       // Maintain tracking variable
+      ARDriver.resume() // no need to check MLP
       readTransactionsCompleted += 1
     }
   }
@@ -212,6 +214,9 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
   StreamMonitor(axi.aw, clockDomain) { payload =>
     val key = payload.id.toInt
     BMonitor.update(key, BMonitor.getOrElse(key, 0) + 1)
+    if (BMonitor.values.sum == axi.config.writeIssuingCapability) {
+      AWDriver.halt()
+    }
   }
 
   /** AXI W: Keeps track of amount of bytes written in every burst beats. */
@@ -236,6 +241,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
       message   = f"No write response expected for ${payload.id.toInt}. Monitor state: ${BMonitor}"
     )
     BMonitor(payload.id.toInt) -= 1
+    AWDriver.resume() // no need to check MLP
     // Maintain tracking variable
     writeTransactionsCompleted += 1
   }
