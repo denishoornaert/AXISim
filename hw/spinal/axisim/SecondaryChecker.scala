@@ -53,6 +53,38 @@ class Axi4CheckerSecondary(axi: Axi4, clockDomain: ClockDomain) {
   private def writeNotInFullCapacity(): Boolean = {
     return AWCounter.count < axi.config.writeIssuingCapability
   }
+
+  /** Start timer for read bandwidth measurement. */
+  def startRead(): Unit = {
+    RDriver.resume()
+  }
+
+  /** Start timer for write bandwidth measurement. */
+  def startWrite(): Unit = {
+    BDriver.resume()
+  }
+
+  /** Start timer for read and write bandwidth measurements. */
+  def start(): Unit = {
+    startRead()
+    startWrite()
+  }
+
+  /** Stop timer for read bandwidth measurement. */
+  def stopRead(): Unit = {
+    RDriver.halt()
+  }
+
+  /** Stop timer for write bandwidth measurement. */
+  def stopWrite(): Unit = {
+    BDriver.halt()
+  }
+
+  /** Stop timer for read and write bandwidth measurements. */
+  def stop(): Unit = {
+    stopRead()
+    stopWrite()
+  }
   
   /** AXI AR: Random drive for AR ready signal. */
   StreamReadyRandomizer(axi.ar, clockDomain, readNotInFullCapacity).setFactor(1.1f)
