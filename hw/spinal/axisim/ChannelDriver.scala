@@ -24,13 +24,13 @@ import spinal.lib.bus.amba4.axi._
 abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain) {
 
   /** Flag indicating whether the driver is thottled */
-  var throttle: Boolean = false
+  var throlled: Boolean = true
 
   /** Internal queue storing the unserved in-flight AXI4 job. */
   val storage = new Axi4JobQueue(cd)
 
   /** AXI4 job scheduled for placement on the AXI channel. */
-  private var scheduled: Axi4Job = null
+  var scheduled: Axi4Job = null
 
   /** 
    *  Method in charge of returning the index of the next job to be 
@@ -73,13 +73,14 @@ abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain)
    *  performed (or if none where previously scheduled).
    */
   private val ctrl = StreamDriver(channel, cd) { p => false }
+  ctrl.delay = 0
   ctrl.driver = (p: T) => {
     var status = false
-    // If we are back in and the current scheduled is marked as placed, it must be done...
-    if ((this.scheduled != null) && this.scheduled.wasPlaced()) {
-      this.scheduled.markAsDone()
-    }
-    if (!throttle) {
+    if (!throlled) {
+      // If we are back in and the current scheduled is marked as placed, it must be done...
+      if ((this.scheduled != null) && this.scheduled.wasPlaced()) {
+        this.scheduled.markAsDone()
+      }
       // Schedule new job if any available AND ready
       if (this.isScheduledAvailable()) {
         if (this.storage.hasCandidate()) {
@@ -87,8 +88,12 @@ abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain)
           // If job scheduled and the job is not done, place on bus
           if (status) {
             this.scheduled.place()
-            val delay = 0
-            this.ctrl.transactionDelay = () => { delay }
+            if (this.scheduled.isLast()) {
+              ctrl.transactionDelay = this.scheduled.delay
+            }
+            else {
+              ctrl.transactionDelay = () => 0
+            }
           }
         }
       }
@@ -97,14 +102,17 @@ abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain)
         if (this.isScheduledBusy()) {
           status = true
           this.scheduled.place()
+          if (this.scheduled.isLast()) {
+            ctrl.transactionDelay = this.scheduled.delay
+          }
+          else {
+            ctrl.transactionDelay = () => 0
+          }
         }
       }
     }
     status
   }
-
-  // Explicitly set control over StreamDriver's flow
-  this.ctrl.setFactor(1.1f)
 
   /** Indicates whether there are pending transactions. */
   def isDone(): Boolean = {
@@ -112,11 +120,11 @@ abstract class ChannelDriver[T <: Data](val channel: Stream[T], cd: ClockDomain)
   }
 
   def halt(): Unit = {
-    throttle = true
+    throlled = true
   }
 
   def resume(): Unit = {
-    throttle = false
+    throlled = false
   }
 
 }
