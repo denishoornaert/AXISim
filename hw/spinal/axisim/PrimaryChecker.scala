@@ -3,7 +3,7 @@ package axisim
 
 import scala.math.pow
 import scala.collection.mutable
-import scala.collection.mutable.Map
+import scala.collection.mutable.{Map, Queue}
 
 
 import spinal.core._
@@ -26,15 +26,15 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
   private var clockCount: BigInt = 0
 
   // AR
-  private val ARDriver = ChannelDriverInOrder(axi.ar, clockDomain)
+  protected val ARDriver = ChannelDriverInOrder(axi.ar, clockDomain)
   // R
-  private val RMonitor: Map[Int, Int] = Map()
+  protected val RMonitor: mutable.Map[Int, mutable.Queue[Axi4Job]] = Map()
   // AW
-  private val AWDriver = ChannelDriverInOrder(axi.aw, clockDomain)
+  protected val AWDriver = ChannelDriverInOrder(axi.aw, clockDomain)
   // W
-  private val WDriver = ChannelDriverInOrder(axi.w, clockDomain) 
+  protected val WDriver = ChannelDriverInOrder(axi.w, clockDomain) 
   // B
-  private val BMonitor: Map[Int, Int] = Map()
+  protected val BMonitor: mutable.Map[Int, mutable.Queue[Axi4Job]] = Map()
 
   // Keep track of amount of transactions processed (i.e., emitted and served)
   private var readTransactionsCompleted: Int = 0
@@ -72,7 +72,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  @return completed `true` if no write transactions are pending.
    */
   def allWritesCompleted(): Boolean = {
-    return BMonitor.values.forall(_ == 0) && AWDriver.isDone()
+    return BMonitor.values.forall(_.isEmpty) && AWDriver.isDone() && WDriver.isDone()
   }
 
   /**
@@ -81,33 +81,45 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  @return completed `true` if no read transactions are pending.
    */
   def allReadsCompleted(): Boolean = {
-    return RMonitor.values.forall(_ == 0) && ARDriver.isDone()
+    return RMonitor.values.forall(_.isEmpty) && ARDriver.isDone()
   }
 
   /** Start timer for read bandwidth measurement. */
   def startRead(): Unit = {
+    ARDriver.resume()
     readStartTimeStamp = clockCount
   }
 
   /** Start timer for write bandwidth measurement. */
   def startWrite(): Unit = {
+    AWDriver.resume()
+    WDriver.resume()
     writeStartTimeStamp = clockCount
-  }
-
-  /** Stop timer for read bandwidth measurement. */
-  def stopRead(): Unit = {
-    readEndTimeStamp = clockCount
-  }
-
-  /** Stop timer for write bandwidth measurement. */
-  def stopWrite(): Unit = {
-    writeEndTimeStamp = clockCount
   }
 
   /** Start timer for read and write bandwidth measurements. */
   def start(): Unit = {
     startRead()
     startWrite()
+  }
+
+  /** Stop timer for read bandwidth measurement. */
+  def stopRead(): Unit = {
+    readEndTimeStamp = clockCount
+    ARDriver.halt()
+  }
+
+  /** Stop timer for write bandwidth measurement. */
+  def stopWrite(): Unit = {
+    writeEndTimeStamp = clockCount
+    AWDriver.halt()
+    WDriver.halt()
+  }
+
+  /** Stop timer for read and write bandwidth measurements. */
+  def stop(): Unit = {
+    stopRead()
+    stopWrite()
   }
 
   /** Reset read bandwidth measurements variables */
@@ -118,6 +130,7 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
     readStartTimeStamp = 0
     readEndTimeStamp = 0
     readByteCount = 0
+    ARDriver.halt()
   }
 
   /** Reset write bandwidth measurements variables */
@@ -128,6 +141,8 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
     writeStartTimeStamp = 0
     writeEndTimeStamp = 0
     writeByteCount = 0
+    AWDriver.halt()
+    WDriver.halt()
   }
 
   /** Reset read and write bandwidth measurements variables */
@@ -168,9 +183,8 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  response phase.
    */
   StreamMonitor(axi.ar, clockDomain) { payload =>
-    val key = payload.id.toInt
-    RMonitor.update(key, RMonitor.getOrElse(key, 0) + 1)
-    if (RMonitor.values.sum == axi.config.readIssuingCapability) {
+    RMonitor.getOrElseUpdate(payload.id.toInt, new Queue[Axi4Job]()) += ARDriver.scheduled 
+    if (RMonitor.values.map(_.size).sum == axi.config.readIssuingCapability) {
       ARDriver.halt()
     }
   }
@@ -191,15 +205,12 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
     // Expectation: there should be a pending transaction for that id
     val job = new Axi4RJob(axi.r)
     assert(
-      assertion = RMonitor(job.id) > 0,
+      assertion = RMonitor(job.id).nonEmpty,
       message   = f"No read response expcted for 0x${job.id.toHexString}"
     )
     // When last beat
     if (payload.last.toBoolean) {
-      readTransactionsCompleted += 1
-      RMonitor(job.id) -= 1
-      if (RMonitor(job.id) == 0)
-        RMonitor.remove(job.id)
+      RMonitor(job.id).dequeue()
       // Maintain tracking variable
       ARDriver.resume() // no need to check MLP
       readTransactionsCompleted += 1
@@ -212,9 +223,8 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    *  response phase.
    */
   StreamMonitor(axi.aw, clockDomain) { payload =>
-    val key = payload.id.toInt
-    BMonitor.update(key, BMonitor.getOrElse(key, 0) + 1)
-    if (BMonitor.values.sum == axi.config.writeIssuingCapability) {
+    BMonitor.getOrElseUpdate(payload.id.toInt, new Queue[Axi4Job]()) += AWDriver.scheduled
+    if (BMonitor.values.map(_.size).sum == axi.config.writeIssuingCapability) {
       AWDriver.halt()
     }
   }
@@ -237,10 +247,10 @@ class Axi4CheckerPrimary(axi: Axi4, clockDomain: ClockDomain) {
    */
   StreamMonitor(axi.b, clockDomain) { payload =>
     assert(
-      assertion = BMonitor.getOrElse(payload.id.toInt, 0) > 0,
+      assertion = BMonitor(payload.id.toInt).nonEmpty,
       message   = f"No write response expected for ${payload.id.toInt}. Monitor state: ${BMonitor}"
     )
-    BMonitor(payload.id.toInt) -= 1
+    BMonitor(payload.id.toInt).dequeue()
     AWDriver.resume() // no need to check MLP
     // Maintain tracking variable
     writeTransactionsCompleted += 1
