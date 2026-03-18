@@ -56,14 +56,45 @@ object Axi4Sim {
  *  It applies to all AXI4 channel jobs (i.e., [[Axi4ARJob]], [[Axi4AWJob]], [[Axi4RJob]], [[Axi4WJob]], [[Axi4BJob]]).
  *
  *  @constructor Creates a job with a delay as a no-parameter function returning an Int (default returns 0).
+ *  Keep track of the job age. Monotonously increases.
  */
-abstract class Axi4Job (
-  private val delay: () => Int = () => 0
-) {
-  
-  /** Keep track of the job age. Monotonously increases. */
-  private var age: Int = 0
+abstract class Axi4Job(val delay: () => Int = () => 10, private var age: Int = 0) {
 
+  // Connection to other jobs
+
+  val served = mutable.Set.empty[Axi4Job]
+  val pending = mutable.Set.empty[Axi4Job]
+
+  var prevs = 0
+
+  def areAllPrecedencesSolved(): Boolean = {
+    return prevs == 0
+  }
+
+  def addServedPrecedence(transaction: Axi4Job): Unit = {
+    transaction.served += this
+    prevs += 1
+  }
+
+  def addPendingPrecedence(transaction: Axi4Job): Unit = {
+    transaction.pending += this
+    prevs += 1
+  }
+
+  def addPrecedence(transaction: Axi4Job, precedenceType: String): Unit = {
+    if (precedenceType == "served") {
+      addServedPrecedence(transaction)
+    }
+    else if (precedenceType == "pending") {
+      addPendingPrecedence(transaction)
+    }
+    else {
+      throw new RuntimeException()
+    }
+  }
+
+  // Job metadata
+  
   /** Status marker */
   protected var done: Boolean = false
 
@@ -72,7 +103,13 @@ abstract class Axi4Job (
 
   /** Increase age of job by one step. */
   def makeOlder(): Unit = {
-    age += 1
+    if (age > 0) {
+      age -= 1
+    }
+  }
+
+  def getAge(): Int = {
+    return age
   }
 
   /**
@@ -82,7 +119,7 @@ abstract class Axi4Job (
    *  @return ready Returns a boolean indicating whether the joib is mature.
    */
   def ready(): Boolean = {
-    return age >= this.delay()
+    return age == 0
   }
 
   /**
@@ -93,10 +130,17 @@ abstract class Axi4Job (
   def isDone(): Boolean = {
     return this.done
   }
-
+  
   def markAsDone(): Unit = {
     this.done = true
   }
+
+  /**
+   *  Indicates if the current beat if the last of the burst.
+   *
+   *  @return `true` if the job beat is the last of the curretn burst.
+   */
+  def isLast(): Boolean
 
   /**
    *  Abstract method in charge of placing signals on the channel.
@@ -133,8 +177,9 @@ abstract class Axi4AXJob(
   val id   : Int,
   val len  : Int,
   val size : Int,
-  val burst: Int = Axi4Sim.burst.INCR
-) extends Axi4Job() {
+  val burst: Int = Axi4Sim.burst.INCR,
+  delay    : Int
+) extends Axi4Job(delay = () => delay) {
 
   val cache   = 8
   val lock    = 0
@@ -209,6 +254,15 @@ abstract class Axi4AXJob(
     return (nextAddress(i) >> maxBurstSize) << maxBurstSize
   }
 
+  /** Indicates if the current beat if the last of the burst.
+   *  Note: always true for data phase (i.e., there is no burst per se).
+   *
+   *  @return `true` if the job beat is the last of the curretn burst.
+   */
+  override def isLast(): Boolean = {
+    return true
+  }
+
   override def place(): Unit = {
     this.channel.addr     #= this.addr
     if (this.channel.config.useId)
@@ -255,14 +309,16 @@ class Axi4AWJob(
   id     : Int,
   len    : Int,
   size   : Int,
-  burst  : Int = Axi4Sim.burst.INCR
+  burst  : Int = Axi4Sim.burst.INCR,
+  delay  : Int
 ) extends Axi4AXJob(
   channel,
   addr,
   id,
   len,
   size,
-  burst
+  burst,
+  delay
 ) {
 
   /**
@@ -278,7 +334,8 @@ class Axi4AWJob(
     channel.id.toInt,
     channel.len.toInt,
     channel.size.toInt,
-    channel.burst.toInt
+    channel.burst.toInt,
+    0
   )
 
   /**
@@ -313,14 +370,16 @@ class Axi4ARJob(
   id     : Int,
   len    : Int,
   size   : Int,
-  burst  : Int = Axi4Sim.burst.INCR
+  burst  : Int = Axi4Sim.burst.INCR,
+  delay  : Int
 ) extends Axi4AXJob(
   channel,
   addr,
   id,
   len,
   size,
-  burst
+  burst,
+  delay
 ) {
 
   /**
@@ -336,7 +395,8 @@ class Axi4ARJob(
     channel.id.toInt,
     channel.len.toInt,
     channel.size.toInt,
-    channel.burst.toInt
+    channel.burst.toInt,
+    0
   )
 
   /**
@@ -362,12 +422,15 @@ class Axi4ARJob(
  *  @param parent Reference to the associated AW job.
  */
 class Axi4WJob(
-  channel   : Axi4W,
-  val data  : Seq[BigInt],
-  val strb  : Seq[BigInt],
-  parent: Axi4AWJob
+  channel : Axi4W,
+  val data: Seq[BigInt],
+  val strb: Seq[BigInt],
+  parent  : Axi4AWJob,
+  delay   : () => Int = () => 0,
+  age     : Int = 120+simRandom.nextInt(30)
 ) extends Axi4Job(
-  delay = () => 20+simRandom.nextInt(20)
+  delay = delay,
+  age   = age
 ) {
 
   assert(
@@ -386,6 +449,14 @@ class Axi4WJob(
     return (this.beat == this.data.length)
   }
 
+  /** Indicates if the current beat if the last of the burst.
+   *
+   *  @return `true` if the job beat is the last of the curretn burst.
+   */
+  override def isLast(): Boolean = {
+    return isDone()
+  }
+
   override def place(): Unit = {
     this.channel.data #= this.data(this.beat)
     if (this.channel.config.useStrb)
@@ -393,7 +464,7 @@ class Axi4WJob(
     // Must be at the end to retrieve data correctly
     this.beat += 1
     if (this.channel.config.useLast)
-      this.channel.last #= this.isDone()
+      this.channel.last #= this.isLast()
   }
 
 }
@@ -408,9 +479,12 @@ class Axi4WJob(
 class Axi4RJob(
   channel : Axi4R,
   val id  : Int = 0,
-  val resp: Int = Axi4Sim.resp.OKAY
+  val resp: Int = Axi4Sim.resp.OKAY,
+  delay   : () => Int = () => 0,
+  age     : Int = 120+simRandom.nextInt(30)
 ) extends Axi4Job(
-  delay = () => 20+simRandom.nextInt(20)
+  delay = delay,
+  age   = age
 ) {
   
   /** 
@@ -454,6 +528,14 @@ class Axi4RJob(
     return this.data.isEmpty
   }
 
+  /** Indicates if the current beat if the last of the burst.
+   *
+   *  @return `true` if the job beat is the last of the curretn burst.
+   */
+  override def isLast(): Boolean = {
+    return isDone()
+  }
+
   override def place(): Unit = {
     this.channel.data #= (this.data.dequeue())()
     if (this.channel.config.useId)
@@ -461,7 +543,7 @@ class Axi4RJob(
     if (this.channel.config.useResp)
       this.channel.resp #= this.resp
     if (this.channel.config.useLast)
-      this.channel.last #= this.data.isEmpty
+      this.channel.last #= isLast()
   }
 }
 
@@ -488,6 +570,15 @@ class Axi4BJob(
    */
   def this(channel: Axi4B, job: Axi4AWJob) = this(channel, job.id, Axi4Sim.resp.OKAY)
 
+  /** Indicates if the current beat if the last of the burst.
+   *  Note: always true for response phase (i.e., there is no burst per se).
+   *
+   *  @return `true` if the job beat is the last of the curretn burst.
+   */
+  override def isLast(): Boolean = {
+    return true
+  }
+
   override def place(): Unit = {
     if (this.channel.config.useId)
       this.channel.id #= id
@@ -509,9 +600,9 @@ class Axi4JobQueue(
   cd: ClockDomain
 ) extends mutable.Queue[Axi4Job]() {
 
-  /** Inidicate whether job candidate for scheduling exists in the queue.
+  /** Indicate whether job candidate for scheduling exists in the queue.
    *
-   *  @return status Yes/no.
+   *  @return status yes/no.
    */
   def hasCandidate(): Boolean = {
     return super.nonEmpty && this.map(p => p.ready()).reduce(_ || _)
